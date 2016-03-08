@@ -10,6 +10,7 @@ import android.hardware.SensorEvent;
 import android.hardware.SensorManager;
 
 import android.os.Message;
+import android.os.ParcelUuid;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.content.Context;
@@ -34,13 +35,24 @@ import android.os.Handler;
 public class MainActivity extends AppCompatActivity implements SensorEventListener {
 
     final int MESSAGE_READ = 10;
-
     private static Context context;
     private static Handler mHandler;
     private static BluetoothDevice mDevice;
+    private static BluetoothDevice mDevice_choosen;
     private static BluetoothAdapter mBluetoothAdapter;
     private static SensorManager senSensorManager;
     private static Sensor senAccelerometer;
+    private static String[] device_selected;
+    private static BluetoothSocket mSocket;
+
+    private static InputStream mInputStream;
+    private static OutputStream mOutputStream;
+
+    private static ParcelUuid[] ParcelUUID_used;
+    private static UUID UUID_used;
+
+    AcceptThread connection_server;
+    ConnectedThread use_communication;
 
     boolean data_acquisition = false;
 
@@ -67,6 +79,15 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+        init_graphical_compenents();
+        init_sensor();
+        init_bluetooth_components();
+        init_callback();
+        refreshBluetoothList();
+    }
+
+
+    private void init_graphical_compenents(){
         mArrayAdapter = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1);
 
         context = getApplicationContext();
@@ -88,10 +109,16 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         textAxisY.setText("Ready");
         textAxisZ.setText("Ready");
 
+    }
+
+    private void init_sensor(){
         senSensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
         senAccelerometer = senSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
         senSensorManager.registerListener(this, senAccelerometer, SensorManager.SENSOR_DELAY_NORMAL);
 
+    }
+
+    private void init_bluetooth_components(){
         mHandler = new Handler() {
             public void handleMessage(Message msg) {
                 switch (msg.what) {
@@ -101,8 +128,7 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
             };
         };
 
-
-                        mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+        mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
         if (mBluetoothAdapter == null) {
             // Device does not support Bluetooth
         }
@@ -110,9 +136,13 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
             Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
             startActivityForResult(enableBtIntent, 1);
         }
+    }
+
+    private void init_callback(){
 
         refreshDeviceButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
+                mBluetoothAdapter.cancelDiscovery();
                 refreshBluetoothList();
             }
         });
@@ -120,9 +150,22 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         listDevice.setOnItemLongClickListener(new AdapterView.OnItemLongClickListener() {
             public boolean onItemLongClick(AdapterView<?> arg0, View arg1,
                                            int pos, long arg3) {
-                displayDataLayout();
+                setDeviceLayoutInvisible();
+                device_selected = mArrayAdapter.getItem(pos).split(System.getProperty("line.separator"));
+
+                if (connection_client(device_selected[1])){
+                    if(set_IO_bluetooth()){
+                        displayDataLayout();
+                    }
+                    else {
+                        displayDeviceLayout();
+                    }
+                }
+                else{
+                    displayDeviceLayout();
+                }
                 return true;
-            }
+            };
         });
 
         selectDeviceButton.setOnClickListener(new View.OnClickListener() {
@@ -130,10 +173,50 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                 displayDataLayout();
             }
         });
+
     }
 
-    public void refreshBluetoothList(){
+    protected boolean connection_client(String Address){
+        boolean res=false;
+        mDevice_choosen = mBluetoothAdapter.getRemoteDevice(Address);
+        showToast(mDevice_choosen.getName());
+
+        // get the UUID's
+        ParcelUUID_used = mDevice_choosen.getUuids();
+        UUID_used = ParcelUUID_used[0].getUuid();
+
+        //connection management
+        try {
+            // MY_UUID is the app's UUID string, also used by the server code
+            mSocket = mDevice_choosen.createRfcommSocketToServiceRecord(UUID_used);
+            showToast("Socket generated");
+            mBluetoothAdapter.cancelDiscovery();
+            mSocket.connect();
+            showToast("Connected");
+            res = true;
+        } catch (IOException e) {
+            showToast("UNABLE TO CONNECT");
+        }
+        return res;
+    }
+
+
+    protected boolean set_IO_bluetooth(){
+        boolean res = false;
+        try {
+            mInputStream = mSocket.getInputStream();
+            mOutputStream = mSocket.getOutputStream();
+            showToast("Ready to send/read data");
+            res = true;
+        } catch (IOException e) {
+            showToast("Error Generating the IO");
+        }
+        return res;
+    }
+
+    protected void refreshBluetoothList(){
         mArrayAdapter.clear();
+        showToast("Refreshing the list");
         Set<BluetoothDevice> pairedDevices = mBluetoothAdapter.getBondedDevices();
 
         // If there are paired devices
@@ -161,6 +244,50 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
         registerReceiver(mReceiver, filter);
     }
+
+    protected boolean send_data(byte[] bytes){
+        boolean res = false;
+        try {
+            mOutputStream.write(bytes);
+            res = true;
+        } catch (IOException e) {
+        }
+        return res;
+    }
+
+
+
+    protected void displayDataLayout() {
+        MainActivity.this.runOnUiThread(new Runnable() {
+            public void run() {
+                deviceLayout.setVisibility(View.INVISIBLE);
+                dataLayout.setVisibility(View.VISIBLE);
+            }
+        });
+        data_acquisition = true;
+    }
+
+    protected void displayDeviceLayout() {
+        MainActivity.this.runOnUiThread(new Runnable() {
+            public void run() {
+                deviceLayout.setVisibility(View.VISIBLE);
+                dataLayout.setVisibility(View.INVISIBLE);
+            }
+        });
+        data_acquisition = true;
+    }
+
+    protected void setDeviceLayoutInvisible(){
+        MainActivity.this.runOnUiThread(new Runnable() {
+            public void run() {
+                deviceLayout.setVisibility(View.INVISIBLE);
+            }
+        });
+    }
+
+
+
+
     @Override
     public void onSensorChanged(SensorEvent event) {
         if(data_acquisition) {
@@ -187,33 +314,11 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                 if (delay > (lastSentDelay + triggerDelay) || delay < (lastSentDelay - triggerDelay) || ratio > (lastSentRatio + triggerRatio) || ratio < (lastSentRatio - triggerRatio)) {
                     lastSentDelay = delay;
                     lastSentRatio = ratio;
-                    Toast.makeText(context, "Sending data", Toast.LENGTH_SHORT).show();
                 }
             }
         }
     }
 
-    protected void displayDataLayout() {
-        MainActivity.this.runOnUiThread(new Runnable() {
-            public void run() {
-                deviceLayout.setVisibility(View.INVISIBLE);
-                dataLayout.setVisibility(View.VISIBLE);
-            }
-        });
-        data_acquisition = true;
-    }
-
-    public BluetoothDevice get_device(){
-        return mDevice;
-    }
-
-    public BluetoothAdapter get_bluetooth_adapter(){
-        return mBluetoothAdapter;
-    }
-
-    public Context get_context(){
-        return context;
-    }
     @Override
     public void onAccuracyChanged(Sensor sensor, int accuracy) {
 
@@ -228,6 +333,19 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         super.onResume();
         senSensorManager.registerListener(this, senAccelerometer, SensorManager.SENSOR_DELAY_NORMAL);
     }
+
+
+
+
+
+    protected void showToast(String str){
+        Toast.makeText(context, str, Toast.LENGTH_SHORT).show();
+    }
+
+
+
+
+
 
     private class AcceptThread extends Thread {
         private final BluetoothServerSocket mmServerSocket;
@@ -273,52 +391,6 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         }
     }
 
-
-    private class ConnectThread extends Thread {
-        private final BluetoothSocket mmSocket;
-        private final BluetoothDevice mmDevice;
-
-        public ConnectThread(BluetoothDevice device) {
-            // Use a temporary object that is later assigned to mmSocket,
-            // because mmSocket is final
-            BluetoothSocket tmp = null;
-            mmDevice = device;
-
-            // Get a BluetoothSocket to connect with the given BluetoothDevice
-            try {
-                // MY_UUID is the app's UUID string, also used by the server code
-                tmp = device.createRfcommSocketToServiceRecord(UUID.fromString("639a941b-84f4-4397-853e-1c1ab4ab6359"));
-            } catch (IOException e) { }
-            mmSocket = tmp;
-        }
-
-        public void run() {
-            // Cancel discovery because it will slow down the connection
-            mBluetoothAdapter.cancelDiscovery();
-
-            try {
-                // Connect the device through the socket. This will block
-                // until it succeeds or throws an exception
-                mmSocket.connect();
-            } catch (IOException connectException) {
-                // Unable to connect; close the socket and get out
-                try {
-                    mmSocket.close();
-                } catch (IOException closeException) { }
-                return;
-            }
-
-            // Do work to manage the connection (in a separate thread)
-            //manageConnectedSocket(mmSocket);
-        }
-
-        /** Will cancel an in-progress connection, and close the socket */
-        public void cancel() {
-            try {
-                mmSocket.close();
-            } catch (IOException e) { }
-        }
-    }
 
     private class ConnectedThread extends Thread {
         private final BluetoothSocket mmSocket;
