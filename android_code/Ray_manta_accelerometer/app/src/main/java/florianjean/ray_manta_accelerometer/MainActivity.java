@@ -9,6 +9,7 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorManager;
 
+import android.os.Message;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.content.Context;
@@ -23,16 +24,23 @@ import android.widget.TableLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.Set;
-
+import java.util.UUID;
+import android.os.Handler;
 
 public class MainActivity extends AppCompatActivity implements SensorEventListener {
 
-    private Context context;
-    private BluetoothDevice mDevice;
-    private BluetoothAdapter mBluetoothAdapter;
-    private SensorManager senSensorManager;
-    private Sensor senAccelerometer;
+    final int MESSAGE_READ = 10;
+
+    private static Context context;
+    private static Handler mHandler;
+    private static BluetoothDevice mDevice;
+    private static BluetoothAdapter mBluetoothAdapter;
+    private static SensorManager senSensorManager;
+    private static Sensor senAccelerometer;
 
     boolean data_acquisition = false;
 
@@ -84,7 +92,17 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         senAccelerometer = senSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
         senSensorManager.registerListener(this, senAccelerometer, SensorManager.SENSOR_DELAY_NORMAL);
 
-        mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+        mHandler = new Handler() {
+            public void handleMessage(Message msg) {
+                switch (msg.what) {
+                    case MESSAGE_READ: {
+                    }
+                }
+            };
+        };
+
+
+                        mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
         if (mBluetoothAdapter == null) {
             // Device does not support Bluetooth
         }
@@ -185,6 +203,17 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         data_acquisition = true;
     }
 
+    public BluetoothDevice get_device(){
+        return mDevice;
+    }
+
+    public BluetoothAdapter get_bluetooth_adapter(){
+        return mBluetoothAdapter;
+    }
+
+    public Context get_context(){
+        return context;
+    }
     @Override
     public void onAccuracyChanged(Sensor sensor, int accuracy) {
 
@@ -200,7 +229,149 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         senSensorManager.registerListener(this, senAccelerometer, SensorManager.SENSOR_DELAY_NORMAL);
     }
 
+    private class AcceptThread extends Thread {
+        private final BluetoothServerSocket mmServerSocket;
+
+        public AcceptThread() {
+            // Use a temporary object that is later assigned to mmServerSocket,
+            // because mmServerSocket is final
+            BluetoothServerSocket tmp = null;
+            try {
+                // MY_UUID is the app's UUID string, also used by the client code
+                tmp = mBluetoothAdapter.listenUsingRfcommWithServiceRecord("Ray_manta", UUID.fromString("639a941b-84f4-4397-853e-1c1ab4ab6359"));
+            } catch (IOException e) { }
+            mmServerSocket = tmp;
+        }
+
+        public void run() {
+            BluetoothSocket socket = null;
+            // Keep listening until exception occurs or a socket is returned
+            while (true) {
+                try {
+                    socket = mmServerSocket.accept();
+                } catch (IOException e) {
+                    break;
+                }
+                // If a connection was accepted
+                if (socket != null) {
+                    // Do work to manage the connection (in a separate thread)
+                    //manageConnectedSocket(socket);
+                    try {
+                        mmServerSocket.close();
+                    } catch (IOException e) {
+                    }
+                    break;
+                }
+            }
+        }
+
+        /** Will cancel the listening socket, and cause the thread to finish */
+        public void cancel() {
+            try {
+                mmServerSocket.close();
+            } catch (IOException e) { }
+        }
+    }
 
 
+    private class ConnectThread extends Thread {
+        private final BluetoothSocket mmSocket;
+        private final BluetoothDevice mmDevice;
+
+        public ConnectThread(BluetoothDevice device) {
+            // Use a temporary object that is later assigned to mmSocket,
+            // because mmSocket is final
+            BluetoothSocket tmp = null;
+            mmDevice = device;
+
+            // Get a BluetoothSocket to connect with the given BluetoothDevice
+            try {
+                // MY_UUID is the app's UUID string, also used by the server code
+                tmp = device.createRfcommSocketToServiceRecord(UUID.fromString("639a941b-84f4-4397-853e-1c1ab4ab6359"));
+            } catch (IOException e) { }
+            mmSocket = tmp;
+        }
+
+        public void run() {
+            // Cancel discovery because it will slow down the connection
+            mBluetoothAdapter.cancelDiscovery();
+
+            try {
+                // Connect the device through the socket. This will block
+                // until it succeeds or throws an exception
+                mmSocket.connect();
+            } catch (IOException connectException) {
+                // Unable to connect; close the socket and get out
+                try {
+                    mmSocket.close();
+                } catch (IOException closeException) { }
+                return;
+            }
+
+            // Do work to manage the connection (in a separate thread)
+            //manageConnectedSocket(mmSocket);
+        }
+
+        /** Will cancel an in-progress connection, and close the socket */
+        public void cancel() {
+            try {
+                mmSocket.close();
+            } catch (IOException e) { }
+        }
+    }
+
+    private class ConnectedThread extends Thread {
+        private final BluetoothSocket mmSocket;
+        private final InputStream mmInStream;
+        private final OutputStream mmOutStream;
+
+        public ConnectedThread(BluetoothSocket socket) {
+            mmSocket = socket;
+            InputStream tmpIn = null;
+            OutputStream tmpOut = null;
+
+            // Get the input and output streams, using temp objects because
+            // member streams are final
+            try {
+                tmpIn = socket.getInputStream();
+                tmpOut = socket.getOutputStream();
+            } catch (IOException e) { }
+
+            mmInStream = tmpIn;
+            mmOutStream = tmpOut;
+        }
+
+        public void run() {
+            byte[] buffer = new byte[1024];  // buffer store for the stream
+            int bytes; // bytes returned from read()
+
+            // Keep listening to the InputStream until an exception occurs
+            while (true) {
+                try {
+                    // Read from the InputStream
+                    bytes = mmInStream.read(buffer);
+                    // Send the obtained bytes to the UI activity
+                    mHandler.obtainMessage(MESSAGE_READ, bytes, -1, buffer)
+                            .sendToTarget();
+                } catch (IOException e) {
+                    break;
+                }
+            }
+        }
+
+        /* Call this from the main activity to send data to the remote device */
+        public void write(byte[] bytes) {
+            try {
+                mmOutStream.write(bytes);
+            } catch (IOException e) { }
+        }
+
+        /* Call this from the main activity to shutdown the connection */
+        public void cancel() {
+            try {
+                mmSocket.close();
+            } catch (IOException e) { }
+        }
+    }
 
 }
