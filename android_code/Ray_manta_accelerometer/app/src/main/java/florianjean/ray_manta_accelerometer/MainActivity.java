@@ -31,6 +31,7 @@ import java.io.OutputStream;
 import java.util.Set;
 import java.util.UUID;
 import android.os.Handler;
+import java.nio.ByteBuffer;
 
 public class MainActivity extends AppCompatActivity implements SensorEventListener {
 
@@ -50,9 +51,6 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
 
     private static ParcelUuid[] ParcelUUID_used;
     private static UUID UUID_used;
-
-    AcceptThread connection_server;
-    ConnectedThread use_communication;
 
     boolean data_acquisition = false;
 
@@ -314,9 +312,25 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                 if (delay > (lastSentDelay + triggerDelay) || delay < (lastSentDelay - triggerDelay) || ratio > (lastSentRatio + triggerRatio) || ratio < (lastSentRatio - triggerRatio)) {
                     lastSentDelay = delay;
                     lastSentRatio = ratio;
+
+                    boolean res = send_data(float2ByteArray(delay));
+                    if (res) {
+                        res = send_data(float2ByteArray(ratio));
+                    }
+                    if(!res){
+                        stop_data();
+                    }
+                    else {
+                        showToast("Data sent");
+                    }
                 }
             }
         }
+    }
+
+    public static byte [] float2ByteArray (float value)
+    {
+        return ByteBuffer.allocate(4).putFloat(value).array();
     }
 
     @Override
@@ -334,116 +348,15 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         senSensorManager.registerListener(this, senAccelerometer, SensorManager.SENSOR_DELAY_NORMAL);
     }
 
-
+    protected void stop_data(){
+        data_acquisition=false;
+        displayDeviceLayout();
+    }
 
 
 
     protected void showToast(String str){
         Toast.makeText(context, str, Toast.LENGTH_SHORT).show();
-    }
-
-
-
-
-
-
-    private class AcceptThread extends Thread {
-        private final BluetoothServerSocket mmServerSocket;
-
-        public AcceptThread() {
-            // Use a temporary object that is later assigned to mmServerSocket,
-            // because mmServerSocket is final
-            BluetoothServerSocket tmp = null;
-            try {
-                // MY_UUID is the app's UUID string, also used by the client code
-                tmp = mBluetoothAdapter.listenUsingRfcommWithServiceRecord("Ray_manta", UUID.fromString("639a941b-84f4-4397-853e-1c1ab4ab6359"));
-            } catch (IOException e) { }
-            mmServerSocket = tmp;
-        }
-
-        public void run() {
-            BluetoothSocket socket = null;
-            // Keep listening until exception occurs or a socket is returned
-            while (true) {
-                try {
-                    socket = mmServerSocket.accept();
-                } catch (IOException e) {
-                    break;
-                }
-                // If a connection was accepted
-                if (socket != null) {
-                    // Do work to manage the connection (in a separate thread)
-                    //manageConnectedSocket(socket);
-                    try {
-                        mmServerSocket.close();
-                    } catch (IOException e) {
-                    }
-                    break;
-                }
-            }
-        }
-
-        /** Will cancel the listening socket, and cause the thread to finish */
-        public void cancel() {
-            try {
-                mmServerSocket.close();
-            } catch (IOException e) { }
-        }
-    }
-
-
-    private class ConnectedThread extends Thread {
-        private final BluetoothSocket mmSocket;
-        private final InputStream mmInStream;
-        private final OutputStream mmOutStream;
-
-        public ConnectedThread(BluetoothSocket socket) {
-            mmSocket = socket;
-            InputStream tmpIn = null;
-            OutputStream tmpOut = null;
-
-            // Get the input and output streams, using temp objects because
-            // member streams are final
-            try {
-                tmpIn = socket.getInputStream();
-                tmpOut = socket.getOutputStream();
-            } catch (IOException e) { }
-
-            mmInStream = tmpIn;
-            mmOutStream = tmpOut;
-        }
-
-        public void run() {
-            byte[] buffer = new byte[1024];  // buffer store for the stream
-            int bytes; // bytes returned from read()
-
-            // Keep listening to the InputStream until an exception occurs
-            while (true) {
-                try {
-                    // Read from the InputStream
-                    bytes = mmInStream.read(buffer);
-                    // Send the obtained bytes to the UI activity
-                    mHandler.obtainMessage(MESSAGE_READ, bytes, -1, buffer)
-                            .sendToTarget();
-                } catch (IOException e) {
-                    break;
-                }
-            }
-        }
-
-        /* Call this from the main activity to send data to the remote device */
-        public void write(byte[] bytes) {
-            try {
-                mmOutStream.write(bytes);
-            } catch (IOException e) { }
-        }
-
-        /* Call this from the main activity to shutdown the connection */
-        public void cancel() {
-            try {
-                mmSocket.close();
-            } catch (IOException e) { }
-        }
     }
 
 }
