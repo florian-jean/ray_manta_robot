@@ -6,6 +6,8 @@ float number_left=1.0;
 bool last_left=false;
 bool last_right=false;
 
+char rcv_buf[20];
+
 int t_delay = 100;
 
 void setup() {
@@ -13,33 +15,54 @@ void setup() {
   for(i=0;i<2*number_buckey_per_edge;i++){
     pinMode(i, OUTPUT);
   }  
+  Serial.begin(115200);
 }
  
-void loop() { 
-  ratio = number_right/(number_right+number_left);
-  if(ratio < ratio_to_aim){
-    if (last_right){
-      forward_right(false);
-      last_right=false;
+void loop() {
+  int data_len;
+  float data_received;
+  while(1)
+  {
+    data_len=0; 
+    while(Serial.available())                 
+    {
+       rcv_buf[(data_len++)%20] =Serial.read();       
+    }
+    data_received = *(float*)&rcv_buf;
+    if(data_received>=0&&data_received<=1){
+      ratio_to_aim=data_received;
+      number_right=1;
+      number_left=1;
+    }
+    else if(data_received>=11){
+      t_delay= (int) data_received;
+    }
+    
+    ratio = number_right/(number_right+number_left);
+    if(ratio < ratio_to_aim){
+      if (last_right){
+        forward_right(false);
+        last_right=false;
+      }
+      else {
+        forward_right(true);
+        last_right=true;
+      }
+      number_right++;
     }
     else {
-      forward_right(true);
-      last_right=true;
+      if (last_left){
+        forward_left(false);
+        last_left=false;
+      }
+      else {
+        forward_left(true);
+        last_left=true;
+      }
+    number_left++;
     }
-    number_right++;
+    delay(t_delay);
   }
-  else {
-    if (last_left){
-      forward_left(false);
-      last_left=false;
-    }
-    else {
-      forward_left(true);
-      last_left=true;
-    }
-  number_left++;
-  }
-  delay(t_delay);
 }
 
 void forward_left(bool b){

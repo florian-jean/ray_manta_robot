@@ -14,13 +14,17 @@ import android.os.ParcelUuid;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.content.Context;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.View;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ListView;
+import android.widget.RadioButton;
 import android.widget.TableLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -35,7 +39,13 @@ import java.nio.ByteBuffer;
 
 public class MainActivity extends AppCompatActivity implements SensorEventListener {
 
+    private final static String string_my_UUID = "d2642200-e5de-11e5-9730-9a79f06e9478";
+
     final int MESSAGE_READ = 10;
+    private static boolean use_app_UUID;
+    private static boolean manual_data;
+
+
     private static Context context;
     private static Handler mHandler;
     private static BluetoothDevice mDevice;
@@ -51,6 +61,7 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
 
     private static ParcelUuid[] ParcelUUID_used;
     private static UUID UUID_used;
+    private static UUID my_UUID;
 
     boolean data_acquisition = false;
 
@@ -63,12 +74,14 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     private float triggerDelay = 50;
     private float triggerRatio = (float) 0.05;
 
-    private TextView textAxisX,textAxisY,textAxisZ,textRatio,textDelay;
+    private TextView textAxisX,textAxisY,textAxisZ;
+    private EditText textRatio,textDelay;
     private CheckBox checkManually;
     private ListView listDevice;
     private LinearLayout deviceLayout;
-    private TableLayout dataLayout;
-    private Button refreshDeviceButton, selectDeviceButton;
+    private LinearLayout dataLayout;
+    private Button refreshDeviceButton, sendData;
+    private RadioButton radioDetectUUID, radioAppUUID;
 
     private ArrayAdapter<String> mArrayAdapter;
 
@@ -89,17 +102,19 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         mArrayAdapter = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1);
 
         context = getApplicationContext();
-        dataLayout = (TableLayout) findViewById(R.id.dataLayout);
+        dataLayout = (LinearLayout) findViewById(R.id.dataLayout);
         deviceLayout = (LinearLayout) findViewById(R.id.deviceLayout);
         refreshDeviceButton = (Button) findViewById(R.id.refreshDeviceButton);
-        selectDeviceButton = (Button) findViewById(R.id.selectDeviceButton);
 
         textAxisX = (TextView) findViewById(R.id.textViewAxisX);
         textAxisY = (TextView) findViewById(R.id.textViewAxisY);
         textAxisZ = (TextView) findViewById(R.id.textViewAxisZ);
-        textRatio = (TextView) findViewById(R.id.textViewRatio);
-        textDelay = (TextView) findViewById(R.id.textViewDelay);
-        checkManually = (CheckBox) findViewById(R.id.checkBoxManually);
+        textRatio = (EditText) findViewById(R.id.textViewRatio);
+        textDelay = (EditText) findViewById(R.id.textViewDelay);
+        radioDetectUUID = (RadioButton) findViewById(R.id.radioButtonDetectUUID);
+        radioAppUUID = (RadioButton) findViewById(R.id.radioButtonAppUUID);
+        checkManually = (CheckBox) findViewById(R.id.checkBoxSendManually);
+        sendData = (Button) findViewById(R.id.buttonSendData);
         listDevice = (ListView) findViewById(R.id.listViewDevice);
         listDevice.setAdapter(mArrayAdapter);
 
@@ -126,6 +141,10 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
             };
         };
 
+        manual_data = false;
+        use_app_UUID = false;
+        my_UUID = UUID.fromString(string_my_UUID);
+
         mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
         if (mBluetoothAdapter == null) {
             // Device does not support Bluetooth
@@ -136,12 +155,102 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         }
     }
 
-    private void init_callback(){
+    private void init_callback() {
+
+        textRatio.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            public void onFocusChange(View v, boolean hasFocus) {
+                if (!textRatio.hasFocus()) {
+                    if (checkManually.isChecked()) {
+                        if(!(textDelay.getText().toString()=="")){
+                            float value = Float.valueOf(textRatio.getText().toString());
+                            if (value < 0) {
+                                textRatio.setText("0");
+                                showToast("Min value is 0");
+                            }
+                            if (value > 1) {
+                                textRatio.setText("1");
+                                showToast("Max value is 1");
+                            }
+                        }
+                        else {
+                            textRatio.setText("0.5");
+                        }
+                    }
+                    ratio = Float.valueOf(textRatio.getText().toString());
+                }
+            }
+        });
+
+        textDelay.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            public void onFocusChange(View v, boolean hasFocus) {
+                if (!textDelay.hasFocus()) {
+                    if (checkManually.isChecked()) {
+                        if(!(textDelay.getText().toString()=="")){
+                            float value = Float.valueOf(textDelay.getText().toString());
+                            if (value < 10) {
+                                textDelay.setText("10");
+                                showToast("Min value is 10");
+                            }
+                        }
+                        else{
+                            textDelay.setText("100");
+                        }
+                    }
+                    ratio = Float.valueOf(textDelay.getText().toString());
+                }
+            }
+        });
 
         refreshDeviceButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 mBluetoothAdapter.cancelDiscovery();
                 refreshBluetoothList();
+            }
+        });
+
+        radioAppUUID.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                radioAppUUID.setChecked(true);
+                radioDetectUUID.setChecked(false);
+                use_app_UUID = true;
+            }
+        });
+
+        radioDetectUUID.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                radioAppUUID.setChecked(false);
+                radioDetectUUID.setChecked(true);
+                use_app_UUID = false;
+            }
+        });
+
+
+        sendData.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                boolean res = send_data(float2ByteArray(delay));
+                if (res) {
+                    res = send_data(float2ByteArray(ratio));
+                }
+                if(!res){
+                    stop_data();
+                }
+                else {
+                    showToast("Data sent");
+                }
+            }
+        });
+
+        checkManually.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                manual_data = checkManually.isChecked();
+                if (manual_data){
+                    textRatio.setEnabled(true);
+                    textDelay.setEnabled(true);
+                }
+                else {
+                    textRatio.setEnabled(false);
+                    textDelay.setEnabled(false);
+                }
             }
         });
 
@@ -151,25 +260,17 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                 setDeviceLayoutInvisible();
                 device_selected = mArrayAdapter.getItem(pos).split(System.getProperty("line.separator"));
 
-                if (connection_client(device_selected[1])){
-                    if(set_IO_bluetooth()){
+                if (connection_client(device_selected[1])) {
+                    if (set_IO_bluetooth()) {
                         displayDataLayout();
-                    }
-                    else {
+                    } else {
                         displayDeviceLayout();
                     }
-                }
-                else{
+                } else {
                     displayDeviceLayout();
                 }
                 return true;
             };
-        });
-
-        selectDeviceButton.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) {
-                displayDataLayout();
-            }
         });
 
     }
@@ -179,9 +280,17 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         mDevice_choosen = mBluetoothAdapter.getRemoteDevice(Address);
         showToast(mDevice_choosen.getName());
 
-        // get the UUID's
-        ParcelUUID_used = mDevice_choosen.getUuids();
-        UUID_used = ParcelUUID_used[0].getUuid();
+        if(use_app_UUID){
+            UUID_used = my_UUID;
+            showToast("Using the apps UUID");
+        }
+        else {
+            // get the UUID's
+            showToast("Detecting the UUID");
+            ParcelUUID_used = mDevice_choosen.getUuids();
+            UUID_used = ParcelUUID_used[0].getUuid();
+        }
+
 
         //connection management
         try {
@@ -288,7 +397,7 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
 
     @Override
     public void onSensorChanged(SensorEvent event) {
-        if(data_acquisition) {
+        if(data_acquisition&&!manual_data) {
             Sensor mySensor = event.sensor;
 
             if (mySensor.getType() == Sensor.TYPE_ACCELEROMETER) {
@@ -304,8 +413,8 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                 textRatio.setText("" + String.valueOf(ratio));
 
                 delay = (500 + 100 * y);
-                if (delay < 1) {
-                    delay = 1;
+                if (delay < 10) {
+                    delay = 10;
                 }
                 textDelay.setText("" + String.valueOf(delay));
 
@@ -314,6 +423,10 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                     lastSentRatio = ratio;
 
                     boolean res = send_data(float2ByteArray(delay));
+                    showToast("Value 0:" + String.valueOf(float2ByteArray(delay)[0]));
+                    showToast("Value 1:" + String.valueOf(float2ByteArray(delay)[1]));
+                    showToast("Value 2:" + String.valueOf(float2ByteArray(delay)[2]));
+                    showToast("Value 3:" + String.valueOf(float2ByteArray(delay)[3]));
                     if (res) {
                         res = send_data(float2ByteArray(ratio));
                     }
@@ -358,5 +471,4 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     protected void showToast(String str){
         Toast.makeText(context, str, Toast.LENGTH_SHORT).show();
     }
-
 }
