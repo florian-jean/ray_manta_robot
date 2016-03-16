@@ -33,6 +33,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Set;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.UUID;
 import android.os.Handler;
 import java.nio.ByteBuffer;
@@ -64,15 +66,12 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     private static UUID my_UUID;
 
     boolean data_acquisition = false;
+    private boolean is_new_data = false;
 
-    private long lastUpdate = 0;
-    private float last_x, last_y, last_z;
-    private static final int SHAKE_THRESHOLD = 600;
+    private float x,y,z,delay,ratio;
 
-    private float x,y,z,delay,ratio, lastSentRatio, lastSentDelay;
-
-    private float triggerDelay = 50;
-    private float triggerRatio = (float) 0.05;
+    private Handler handler_send;
+    private Runnable runnableCode;
 
     private TextView textAxisX,textAxisY,textAxisZ;
     private EditText textRatio,textDelay;
@@ -95,6 +94,8 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         init_bluetooth_components();
         init_callback();
         refreshBluetoothList();
+        init_handler_data();
+        handler_send.post(runnableCode);
     }
 
 
@@ -129,6 +130,23 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         senAccelerometer = senSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
         senSensorManager.registerListener(this, senAccelerometer, SensorManager.SENSOR_DELAY_NORMAL);
 
+    }
+
+    private void init_handler_data(){
+        handler_send = new Handler();
+        // Define the code block to be executed
+        runnableCode = new Runnable() {
+            @Override
+            public void run() {
+                if(data_acquisition&&is_new_data){
+                    is_new_data=false;
+                    send_data(float2ByteArray(ratio));
+                    send_data(float2ByteArray(delay));
+                    showToast("Data send");
+                }
+                handler_send.postDelayed(runnableCode, 1000);
+            }
+        };
     }
 
     private void init_bluetooth_components(){
@@ -203,7 +221,6 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
 
         refreshDeviceButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
-                mBluetoothAdapter.cancelDiscovery();
                 refreshBluetoothList();
             }
         });
@@ -270,7 +287,9 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                     displayDeviceLayout();
                 }
                 return true;
-            };
+            }
+
+            ;
         });
 
     }
@@ -322,18 +341,10 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     }
 
     protected void refreshBluetoothList(){
+
+        mBluetoothAdapter.cancelDiscovery();
         mArrayAdapter.clear();
         showToast("Refreshing the list");
-        Set<BluetoothDevice> pairedDevices = mBluetoothAdapter.getBondedDevices();
-
-        // If there are paired devices
-        if (pairedDevices.size() > 0) {
-            // Loop through paired devices
-            for (BluetoothDevice device : pairedDevices) {
-                // Add the name and address to an array adapter to show in a ListView
-                mArrayAdapter.add(device.getName() + "\n" + device.getAddress());
-            }
-        }
 
         // Create a BroadcastReceiver for ACTION_FOUND
         final BroadcastReceiver mReceiver = new BroadcastReceiver() {
@@ -348,8 +359,14 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                 }
             }
         };
+
         IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
         registerReceiver(mReceiver, filter);
+        filter = new IntentFilter(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
+        this.registerReceiver(mReceiver, filter);
+
+        mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+        mBluetoothAdapter.startDiscovery();
     }
 
     protected boolean send_data(byte[] bytes){
@@ -409,34 +426,22 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                 textAxisY.setText("" + String.valueOf(y));
                 textAxisZ.setText("" + String.valueOf(z));
 
-                ratio = (x + 10) / 20;
+                float new_ratio = ((float)((int)(((x + 10) / 20)*10)))/10;
+                if(new_ratio!=ratio){
+                    ratio=new_ratio;
+                    is_new_data=true;
+                }
                 textRatio.setText("" + String.valueOf(ratio));
 
-                delay = (500 + 100 * y);
-                if (delay < 10) {
-                    delay = 10;
+                float new_delay = (float)(500 + 100*((int)y));
+                if (new_delay < 10) {
+                    new_delay = 10;
+                }
+                if(new_delay!=delay){
+                    delay=new_delay;
+                    is_new_data=true;
                 }
                 textDelay.setText("" + String.valueOf(delay));
-
-                if (delay > (lastSentDelay + triggerDelay) || delay < (lastSentDelay - triggerDelay) || ratio > (lastSentRatio + triggerRatio) || ratio < (lastSentRatio - triggerRatio)) {
-                    lastSentDelay = delay;
-                    lastSentRatio = ratio;
-
-                    boolean res = send_data(float2ByteArray(delay));
-                    showToast("Value 0:" + String.valueOf(float2ByteArray(delay)[0]));
-                    showToast("Value 1:" + String.valueOf(float2ByteArray(delay)[1]));
-                    showToast("Value 2:" + String.valueOf(float2ByteArray(delay)[2]));
-                    showToast("Value 3:" + String.valueOf(float2ByteArray(delay)[3]));
-                    if (res) {
-                        res = send_data(float2ByteArray(ratio));
-                    }
-                    if(!res){
-                        stop_data();
-                    }
-                    else {
-                        showToast("Data sent");
-                    }
-                }
             }
         }
     }
